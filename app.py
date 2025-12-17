@@ -5,11 +5,9 @@ from random import randint, choice
 from math import hypot
 import string
 
-# ----------------- Socket.IO server -----------------
 sio = socketio.Server(cors_allowed_origins="*")
 app = socketio.WSGIApp(sio)
 
-# ----------------- Game state -----------------
 players = {}
 
 COLORS = [
@@ -21,10 +19,11 @@ COLORS = [
     (100, 255, 255)
 ]
 
+# без математики не лізти ;)
 def distance(p1, p2):
     return hypot(p1["x"] - p2["x"], p1["y"] - p2["y"])
 
-# ----------------- Socket.IO events -----------------
+# ----------------- База-основа кожного гравця -----------------
 @sio.event
 def connect(sid, environ):
     print("Player connected:", sid)
@@ -59,29 +58,28 @@ def update_player(sid, data):
 
     me = players[sid]
 
-    # ---- collision check ----
     for pid, p in list(players.items()):
         if pid == sid:
             continue
 
         dist = distance(me, p)
 
-        # me eats p
+        # ти поглинаєш когось
         if dist < me["r"] and me["r"] > p["r"] * 1.1:
             me["r"] += int(p["r"] * 0.7)
             del players[pid]
             print(sid, "ate", pid)
             sio.emit("state_update", {"players": players})
-            sio.emit("you_died", {}, to=pid)   # notify loser
+            sio.emit("you_died", {}, to=pid)   # повідомлення для жертви
             return
 
-        # p eats me
+        # хтось з'їдає вас
         elif dist < p["r"] and p["r"] > me["r"] * 1.1:
             p["r"] += int(me["r"] * 0.7)
             del players[sid]
             print(pid, "ate", sid)
             sio.emit("state_update", {"players": players})
-            sio.emit("you_died", {}, to=sid)   # notify loser
+            sio.emit("you_died", {}, to=sid)   # повідомлення для мене)
             return
 
     sio.emit("state_update", {"players": players})
@@ -93,7 +91,7 @@ def set_radius(sid, data):
         players[sid]["r"] = data["r"]
         sio.emit("state_update", {"players": players})
 
-# ----------------- Run server -----------------
+# дефолтний запуск сервака)
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 7500))
     print(f"Server starting on port {port}...")
