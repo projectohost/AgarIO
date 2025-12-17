@@ -1,2 +1,4 @@
 python-socketio[asgi]
 uvicorn
+python-socketio
+eventlet

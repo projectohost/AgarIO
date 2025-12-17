@@ -1,118 +1,100 @@
+import os
+import eventlet
 import socketio
 from random import randint, choice
 from math import hypot
 import string
 
-# ASGI Socket.IO server (Render compatible)
-sio = socketio.AsyncServer(
-    async_mode="asgi",
-    cors_allowed_origins="*"
-)
-app = socketio.ASGIApp(sio)
+# ----------------- Socket.IO server -----------------
+sio = socketio.Server(cors_allowed_origins="*")
+app = socketio.WSGIApp(sio)
 
-# Game state
+# ----------------- Game state -----------------
 players = {}
-foods = [
-    {
-        "x": randint(-2000, 2000),
-        "y": randint(-2000, 2000),
-        "r": 10,
-        "c": [randint(0, 255), randint(0, 255), randint(0, 255)]
-    }
-    for _ in range(300)
+
+COLORS = [
+    (255, 100, 100),
+    (100, 255, 100),
+    (100, 100, 255),
+    (255, 255, 100),
+    (255, 100, 255),
+    (100, 255, 255)
 ]
 
+def distance(p1, p2):
+    return hypot(p1["x"] - p2["x"], p1["y"] - p2["y"])
 
-def random_name():
-    return "".join(choice(string.ascii_uppercase + string.digits) for _ in range(3))
-
-
+# ----------------- Socket.IO events -----------------
 @sio.event
-async def connect(sid, environ):
+def connect(sid, environ):
+    print("Player connected:", sid)
+
+    name = ''.join(choice(string.ascii_uppercase) for _ in range(4))
+
     players[sid] = {
         "x": randint(-500, 500),
         "y": randint(-500, 500),
         "r": 20,
-        "color": [randint(0, 255), randint(0, 255), randint(0, 255)],
-        "name": random_name()
+        "color": choice(COLORS),
+        "name": name
     }
 
-    print(f"Player {players[sid]['name']} connected.")
-
-    await sio.emit("state_update", {
-        "players": players,
-        "foods": foods
-    })
+    sio.emit("state_update", {"players": players})
 
 
 @sio.event
-async def disconnect(sid):
+def disconnect(sid):
     if sid in players:
-        print(f"Player {players[sid]['name']} disconnected.")
-        players.pop(sid, None)
-
-    await sio.emit("state_update", {
-        "players": players,
-        "foods": foods
-    })
+        del players[sid]
+    sio.emit("state_update", {"players": players})
 
 
-@sio.event
-async def update_player(sid, data):
+@sio.on("update_player")
+def update_player(sid, data):
     if sid not in players:
         return
 
-    # Update player position
-    p = players[sid]
-    p["x"], p["y"] = data["x"], data["y"]
+    players[sid]["x"] = data["x"]
+    players[sid]["y"] = data["y"]
 
-    # --- FOOD COLLISION ---
-    eaten = []
-    for f in foods:
-        if hypot(f["x"] - p["x"], f["y"] - p["y"]) <= f["r"] + p["r"]:
-            eaten.append(f)
-            p["r"] += int(f["r"] * 0.3)
+    me = players[sid]
 
-    for f in eaten:
-        foods.remove(f)
-        foods.append({
-            "x": randint(-2000, 2000),
-            "y": randint(-2000, 2000),
-            "r": 10,
-            "c": [randint(0, 255), randint(0, 255), randint(0, 255)]
-        })
-
-    # --- PLAYER COLLISION ---
-    to_remove = []
-    for sid2, other in list(players.items()):
-        if sid2 == sid:
+    # ---- collision check ----
+    for pid, p in list(players.items()):
+        if pid == sid:
             continue
 
-        dist = hypot(other["x"] - p["x"], other["y"] - p["y"])
-        if dist <= other["r"] + p["r"]:
+        dist = distance(me, p)
 
-            # p eats other
-            if p["r"] > other["r"] * 1.1:
-                p["r"] += int(other["r"] * 0.4)
-                to_remove.append(sid2)
-                await sio.emit("player_lost", {"sid": sid2}, room=sid2)
+        # me eats p
+        if dist < me["r"] and me["r"] > p["r"] * 1.1:
+            me["r"] += int(p["r"] * 0.7)
+            del players[pid]
+            print(sid, "ate", pid)
+            sio.emit("state_update", {"players": players})
+            sio.emit("you_died", {}, to=pid)   # notify loser
+            return
 
-            # other eats p
-            elif other["r"] > p["r"] * 1.1:
-                other["r"] += int(p["r"] * 0.4)
-                to_remove.append(sid)
-                await sio.emit("player_lost", {"sid": sid}, room=sid)
-                break
+        # p eats me
+        elif dist < p["r"] and p["r"] > me["r"] * 1.1:
+            p["r"] += int(me["r"] * 0.7)
+            del players[sid]
+            print(pid, "ate", sid)
+            sio.emit("state_update", {"players": players})
+            sio.emit("you_died", {}, to=sid)   # notify loser
+            return
 
-    for sid_r in to_remove:
-        players.pop(sid_r, None)
-
-    # Send updated state to all players
-    await sio.emit("state_update", {
-        "players": players,
-        "foods": foods
-    })
+    sio.emit("state_update", {"players": players})
 
 
-# RUNNING:
-# Render will run with: uvicorn server:app --host 0.0.0.0 --port $PORT
+@sio.on("set_radius")
+def set_radius(sid, data):
+    if sid in players:
+        players[sid]["r"] = data["r"]
+        sio.emit("state_update", {"players": players})
+
+# ----------------- Run server -----------------
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 7500))
+    print(f"Server starting on port {port}...")
+    eventlet.wsgi.server(eventlet.listen(("0.0.0.0", port)), app)
