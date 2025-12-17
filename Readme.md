@@ -1,4 +1,4 @@
-# Agario Clone – Online Game
+# Agario Clone
 
 Онлайн-гра типу Agar.io на Python з **Socket.IO** та **Pygame**.  
 Сервер підтримує реальні оновлення гравців через **WebSockets**.
